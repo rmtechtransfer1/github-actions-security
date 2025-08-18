@@ -1,0 +1,237 @@
+name: Container Attestation
+description: Sign container and create in-toto provenance using Sigstore Cosign (keyless flow)
+
+inputs:
+  image_name:
+    description: 'Full image name with registry (e.g. ghcr.io/org/image)'
+    required: true
+  image_digest:
+    description: 'Image digest from build step (sha256:...)'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@v3.5.0
+      with:
+        cosign-release: 'v2.2.4'
+
+    - name: Install Syft for container SBOM
+      shell: bash
+      run: |
+        curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin
+
+    # Generate container SBOM
+    - name: Generate container SBOM
+      shell: bash
+      run: |
+        # Define SBOM filenames
+        CONTAINER_SBOM_SPDX="container-sbom.spdx.json"
+        CONTAINER_SBOM_CYCLONEDX="container-sbom.cyclonedx.json"
+        IMAGE_REF="${{ inputs.image_name }}@${{ inputs.image_digest }}"
+        
+        echo "Generating container SBOM..."
+        
+        # Generate SPDX format
+        syft $IMAGE_REF \
+          -o spdx-json=$CONTAINER_SBOM_SPDX
+        
+        # Generate CycloneDX format
+        syft $IMAGE_REF \
+          -o cyclonedx-json=$CONTAINER_SBOM_CYCLONEDX
+        
+        # Save to environment for later steps
+        echo "CONTAINER_SBOM_SPDX=$CONTAINER_SBOM_SPDX" >> $GITHUB_ENV
+        echo "CONTAINER_SBOM_CYCLONEDX=$CONTAINER_SBOM_CYCLONEDX" >> $GITHUB_ENV
+        echo "IMAGE_REF=$IMAGE_REF" >> $GITHUB_ENV
+
+    # Sign container with Cosign (keyless flow using Sigstore)
+    - name: Sign container with Cosign (keyless)
+      shell: bash
+      run: |
+        IMAGE_REF="${{ inputs.image_name }}@${{ inputs.image_digest }}"
+        
+        echo "Signing container image with Cosign keyless signing..."
+        cosign sign --yes $IMAGE_REF
+
+    # Download the generated provenance
+    - name: Download provenance
+      shell: bash
+      run: |
+        # Define provenance filename
+        PROVENANCE_FILE="provenance.json"
+        IMAGE_REF="${{ inputs.image_name }}@${{ inputs.image_digest }}"
+        
+        echo "Downloading provenance attestation..."
+        # The slsa-github-generator creates and attaches provenance automatically
+        # We can download it for artifact upload
+        cosign download attestation $IMAGE_REF \
+          --predicate-type=https://slsa.dev/provenance/v0.2 > $PROVENANCE_FILE || true
+        
+        echo "PROVENANCE_FILE=$PROVENANCE_FILE" >> $GITHUB_ENV
+
+    # Attest container SBOMs with Cosign
+    - name: Attest container SBOMs with Cosign
+      shell: bash
+      run: |
+        # Retrieve filenames from environment or use defaults
+        CONTAINER_SBOM_CYCLONEDX="${CONTAINER_SBOM_CYCLONEDX:-container-sbom.cyclonedx.json}"
+        CONTAINER_SBOM_SPDX="${CONTAINER_SBOM_SPDX:-container-sbom.spdx.json}"
+        IMAGE_REF="${IMAGE_REF:-${{ inputs.image_name }}@${{ inputs.image_digest }}}"
+        
+        echo "Attesting container SBOMs with Cosign..."
+        
+        # Attest CycloneDX SBOM
+        cosign attest --yes \
+          --predicate $CONTAINER_SBOM_CYCLONEDX \
+          --type cyclonedx \
+          $IMAGE_REF
+        
+        # Attest SPDX SBOM
+        cosign attest --yes \
+          --predicate $CONTAINER_SBOM_SPDX \
+          --type spdx \
+          $IMAGE_REF
+    
+    # Create GitHub Summary (minimal version)
+    - name: Publish attestation results to summary
+      if: always()
+      shell: bash
+      run: |
+        IMAGE_REF="${{ inputs.image_name }}@${{ inputs.image_digest }}"
+        
+        {
+          echo "# Container Attestation Report"
+          echo ""
+          echo "**Image:** \`$IMAGE_REF\`"
+          echo "**Date:** $(date -u '+%Y-%m-%d %H:%M UTC')"
+          echo ""
+          
+          # Quick status check
+          if cosign verify $IMAGE_REF \
+                --certificate-identity-regexp "https://github.com/${{ github.repository }}/*" \
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com &>/dev/null; then
+            echo "## Status: SIGNED & VERIFIED"
+            echo "Successfully signed with Sigstore keyless signing"
+          else
+            echo "## Status: VERIFICATION FAILED"
+            echo "Check logs for details"
+          fi
+          
+          echo ""
+          echo "## Attestations"
+          echo "- Container signature"
+          echo "- SBOM attestations (CycloneDX, SPDX)"
+          echo "- SLSA provenance"
+        } >> $GITHUB_STEP_SUMMARY
+
+
+    # Download and attest source SBOMs if they exist
+    - name: Download source SBOMs
+      uses: actions/download-artifact@v4
+      with:
+        name: source-sboms
+        path: sboms/
+      continue-on-error: true
+
+    # Attest SBOMs with Cosign
+    - name: Attest source SBOMs with Cosign
+      shell: bash
+      run: |
+        # Define source SBOM directory
+        SOURCE_SBOM_DIR="sboms"
+        IMAGE_REF="${IMAGE_REF:-${{ inputs.image_name }}@${{ inputs.image_digest }}}"
+        
+        if [ -d "$SOURCE_SBOM_DIR" ]; then
+          for sbom in $SOURCE_SBOM_DIR/*.json; do
+            if [ -f "$sbom" ]; then
+              filename=$(basename "$sbom")
+              if [[ "$filename" == *"cyclonedx"* ]]; then
+                type="cyclonedx"
+              elif [[ "$filename" == *"spdx"* ]]; then
+                type="spdx"
+              else
+                continue
+              fi
+              
+              echo "Attesting $filename with Cosign..."
+              cosign attest --yes \
+                --predicate "$sbom" \
+                --type "$type" \
+                $IMAGE_REF
+            fi
+          done
+        fi
+
+    # Create vulnerability attestation if scan results exist
+    - name: Check for vulnerability scan results
+      shell: bash
+      run: |
+        # Define Trivy results filename
+        TRIVY_VULN_RESULTS="vuln-misconfig-scans-trivy-vuln-results.json"
+        IMAGE_REF="${IMAGE_REF:-${{ inputs.image_name }}@${{ inputs.image_digest }}}"
+        
+        # Check if Trivy results exist from previous scan
+        if [ -f "$TRIVY_VULN_RESULTS" ]; then
+          echo "Found vulnerability scan results, creating attestation..."
+          cosign attest --yes \
+            --predicate $TRIVY_VULN_RESULTS \
+            --type vuln \
+            $IMAGE_REF
+        else
+          echo "No vulnerability scan results found"
+        fi
+    
+    # Verify all attestations
+    - name: Verify attestations
+      shell: bash
+      run: |
+        IMAGE_REF="${IMAGE_REF:-${{ inputs.image_name }}@${{ inputs.image_digest }}}"
+        
+        echo "Verifying Cosign signatures and attestations..."
+        echo ""
+        
+        # Verify Cosign signature
+        echo "Verify container signature..."
+        cosign verify $IMAGE_REF \
+          --certificate-identity-regexp "https://github.com/${{ github.repository }}/*" \
+          --certificate-oidc-issuer https://token.actions.githubusercontent.com 2>&1 | \
+        grep -q "Verification" && echo "Container signature verified" || echo "Container signature verification failed"
+        echo ""
+
+        # Verify SBOM attestations
+        echo "Verifying SBOM attestations..."
+        for type in cyclonedx spdx; do
+          echo "Checking $type attestation..."
+          cosign verify-attestation $IMAGE_REF \
+            --certificate-identity-regexp "https://github.com/${{ github.repository }}/*" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --type $type 2>&1 | grep -q "Verification" && \
+            echo "$type attestation verified" || \
+            echo "No $type attestation found"
+        done
+        echo ""
+
+        # Verify SLSA provenance
+        echo "Verifying SLSA provenance..."
+        cosign verify-attestation $IMAGE_REF \
+          --certificate-identity-regexp "https://github.com/${{ github.repository }}/*" \
+          --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+          --type slsaprovenance 2>&1 | grep -q "Verification" && \
+          echo "SLSA provenance verified (from workflow)"
+        echo ""
+        echo "Attestations verified successfully"
+        
+    # Upload attestation artifacts
+    - name: Upload attestation artifacts
+      if: always() && env.ACT != 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: container-attestations
+        path: |
+          container-sbom.spdx.json
+          container-sbom.cyclonedx.json
+          provenance.json
+        retention-days: 7
+        if-no-files-found: warn

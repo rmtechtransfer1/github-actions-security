@@ -1,0 +1,74 @@
+name: Static Analysis
+description: bandit
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install tools
+      shell: bash
+      run: |
+        python -m pip install bandit
+        echo "Verifying Bandit installed"
+        bandit --version
+
+    # Run Bandit
+    - name: Run Bandit
+      shell: bash
+      run: |
+        # Define variables
+        SCAN_DIR="service"
+        BANDIT_REPORT="static_analysis_bandit_report.txt"
+        ARTIFACT_NAME="static-analysis-bandit"
+        EXCLUDE_DIRS="service/.venv,service/venv"
+        SEVERITY_LEVEL="-l"  # -l excludes Low, -ll excludes Low and Medium
+        RETENTION_DAYS="7"
+        
+        if [ -d "$SCAN_DIR" ]; then
+          echo "Running Bandit security scan..."
+          
+          # Save to environment
+          echo "BANDIT_REPORT=$BANDIT_REPORT" >> $GITHUB_ENV
+          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $GITHUB_ENV
+          echo "RETENTION_DAYS=$RETENTION_DAYS" >> $GITHUB_ENV
+          
+          # Run and capture exit code
+          bandit -r $SCAN_DIR/ $SEVERITY_LEVEL --exclude $EXCLUDE_DIRS 2>&1 | tee $BANDIT_REPORT || true
+          BANDIT_EXIT=${PIPESTATUS[0]}
+          
+          # Check on high vulnerabilities (criticals are not reported by Bandit)
+          echo "=== BANDIT SECURITY RESULTS ==="
+          if [ -f "$BANDIT_REPORT" ]; then
+            TOTAL_ISSUES=$(grep -c ">> Issue:" $BANDIT_REPORT 2>/dev/null || true)
+            HIGH_ISSUES=$(grep -c "Severity: High" $BANDIT_REPORT 2>/dev/null || true)
+            echo "Total issues: ${TOTAL_ISSUES:-0}"
+            echo "High severity: ${HIGH_ISSUES:-0}"
+            if [ "${TOTAL_ISSUES:-0}" -gt 0 ]; then
+              grep ">> Issue:" $BANDIT_REPORT || true
+            else
+              echo "No Medium/High issues found (Low issues excluded by $SEVERITY_LEVEL flag)"
+            fi
+          fi
+          
+          # Exit based on tool result
+          if [ $BANDIT_EXIT -ne 0 ]; then
+            echo "BANDIT FAILED: Security issues found"
+            exit 1
+          else
+            echo "BANDIT PASSED: No security issues found"
+          fi
+        else
+          echo "No $SCAN_DIR directory - skipping Bandit"
+        fi
+    # Upload
+    - name: Upload Report
+      if: always() && env.ACT != 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_NAME }}
+        path: ${{ env.BANDIT_REPORT }}
+        retention-days: ${{ env.RETENTION_DAYS }}
+        if-no-files-found: ignore

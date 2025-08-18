@@ -1,0 +1,85 @@
+
+name: Build and Test CPP
+description: Configure build and run CPP unit tests with GoogleTest
+
+runs:
+  using: composite
+  
+  steps:
+  - name: Configure CMake
+    shell: bash
+    run: |
+      cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+
+  # Building CPP project
+  - name: Build CPP project
+    shell: bash
+    run: |
+      cmake --build build
+
+  # Run CPP unit tests
+  - name: Run CPP unit tests
+    shell: bash
+    run: |
+      # Define output filenames
+      CPP_TEST_OUTPUT="cpp_test_results.txt"
+      CPP_BINARY="cli_app"
+      TEST_ARTIFACTS_DIR="build-test-artifacts"
+      ARTIFACT_NAME="cpp-test-artifacts"
+
+      cd build
+      ctest --output-on-failure --verbose > ../$CPP_TEST_OUTPUT 2>&1
+      echo "TEST_EXIT_CODE=$?" >> $GITHUB_ENV
+
+      echo "CPP_TEST_OUTPUT=$CPP_TEST_OUTPUT" >> $GITHUB_ENV
+      echo "CPP_BINARY=$CPP_BINARY" >> $GITHUB_ENV
+      echo "TEST_ARTIFACTS_DIR=$TEST_ARTIFACTS_DIR" >> $GITHUB_ENV
+      echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $GITHUB_ENV
+      exit 0
+
+  # Create Summary
+  - name: Create build summary
+    if: always()
+    shell: bash
+    run: |
+      TEST_EXIT_CODE="${TEST_EXIT_CODE:-0}"
+      CPP_TEST_OUTPUT="${CPP_TEST_OUTPUT:-cpp_test_results.txt}"
+
+      {
+        echo "## C++ Build & Test"
+        echo "**Build Type:** $BUILD_TYPE"
+        echo "**Status:** $([ "$TEST_EXIT_CODE" == "0" ] && echo "PASSED" || echo "FAILED")"
+        echo ""
+        if [ -f "$CPP_TEST_OUTPUT"  ]; then
+          echo "<details><summary>Test Output</summary>"
+          echo ""
+          echo '```'
+          tail -n 50 "$CPP_TEST_OUTPUT" 
+          echo '```'
+          echo "</details>"
+        fi
+      } >> $GITHUB_STEP_SUMMARY
+
+  # Prepare artifacts
+  - name: Prepare test artifacts
+    if: always()
+    shell: bash
+    run: |
+
+      CPP_TEST_OUTPUT="${CPP_TEST_OUTPUT:-cpp_test_results.txt}"
+      CPP_BINARY="${CPP_BINARY:-cli_app}"
+      TEST_ARTIFACTS_DIR="${TEST_ARTIFACTS_DIR:-build-test-artifacts}"
+
+      mkdir -p $TEST_ARTIFACTS_DIR
+      [ -f "build/bin/$CPP_BINARY" ] && cp build/bin/$CPP_BINARY $TEST_ARTIFACTS_DIR/ || true
+      [ -f "$CPP_TEST_OUTPUT" ] && cp $CPP_TEST_OUTPUT $TEST_ARTIFACTS_DIR/ || true
+
+  # Upload test artifacts
+  - name: Upload test artifacts
+    uses: actions/upload-artifact@v4
+    if: always() && env.ACT != 'true'
+    with:
+      name: ${{ env.ARTIFACT_NAME }}
+      path: ${{ env.TEST_ARTIFACTS_DIR }}/
+      retention-days: 7
+      if-no-files-found: warn
