@@ -4,7 +4,7 @@
 
 This repository contains workflow templates that help you get started with security-focused GitHub Actions. These templates are presented in the GitHub Actions workflow creation UI to help you quickly set up security scanning for your projects.
 
-## 🚀 Available Workflow Templates
+## Available Workflow Templates
 
 ### CI Workflows (Build + Security)
 
@@ -34,7 +34,7 @@ This repository contains workflow templates that help you get started with secur
 - **Features**: Runs Bandit security linter, uploads results to GitHub Security tab
 - **Requires**: Python files
 
-## 🛠️ How to Use
+## How to Use
 
 ### Method 1: From GitHub UI (Recommended)
 1. Go to your repository on GitHub
@@ -48,7 +48,7 @@ This repository contains workflow templates that help you get started with secur
 ### Method 2: Copy and Customize
 Copy the workflow files from this repository to your project's `.github/workflows/` directory and customize as needed.
 
-## 📋 Quick Start Examples
+## Quick Start Examples
 
 ### For a C++ Project
 ```yaml
@@ -128,5 +128,3 @@ Checks: 'readability-*,security-*,performance-*,-readability-magic-numbers'
 WarningsAsErrors: 'security-*'
 ```
 
-#### Bandit
-Create `.bandit` or `pypr
