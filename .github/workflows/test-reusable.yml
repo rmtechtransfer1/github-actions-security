@@ -1,0 +1,16 @@
+# .github/workflows/test-reusable.yml
+name: Test Reusable Workflows
+
+on:
+  workflow_dispatch:  # Manual trigger for testing
+
+jobs:
+  # Test the simplest call first
+  test-bandit:
+    uses: rmtechtransfer1/github-actions-security/.github/workflows/bandit-code-scanning.yml@main
+    with:
+      scan-path: '.'
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
