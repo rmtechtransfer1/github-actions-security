@@ -55,12 +55,11 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: rmtechtransfer1/github-actions-security
-        path: security-actions  # Simpler path
+        path: security-actions 
         ref: main
     
-    # Now use the correct path to the action
     - name: Setup C++ dependencies and tools
-      uses: ./security-actions/.github/actions/setup-dependencies/c++
+      uses: ./security-actions/.github/actions/setup-dependencies/cmake
       with:
         cmake-build-type: ${{ inputs.build-type }}
         install-security-tools: 'true'

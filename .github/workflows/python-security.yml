@@ -60,10 +60,9 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: rmtechtransfer1/github-actions-security
-        path: security-actions  # Simpler path
+        path: security-actions
         ref: main
     
-    # Use the Python specific setup action
     - name: Setup Python dependencies and tools
       uses: ./security-actions/.github/actions/setup-dependencies/python
       with:
