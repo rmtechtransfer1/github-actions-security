@@ -29,6 +29,9 @@ on:
         required: false
         default: true
         type: boolean
+    secrets:
+      token:
+        required: true
     outputs:
       artifact-name:
         description: 'Name of the uploaded artifact'
