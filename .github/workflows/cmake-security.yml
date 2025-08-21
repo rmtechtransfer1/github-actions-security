@@ -48,19 +48,19 @@ jobs:
     - name: Checkout calling repository code
       uses: actions/checkout@v4
       with:
-        repository: ${{ github.repository }}  # Caller's repo
+        repository: ${{ github.repository }}
         ref: ${{ github.ref }}
     
     - name: Checkout security actions repository
       uses: actions/checkout@v4
       with:
         repository: rmtechtransfer1/github-actions-security
-        path: .github/security-actions
+        path: security-actions  # Simpler path
         ref: main
     
-    # Use the C++ specific setup action
+    # Now use the correct path to the action
     - name: Setup C++ dependencies and tools
-      uses: ./.github/actions/setup-dependencies/c++
+      uses: ./security-actions/.github/actions/setup-dependencies/c++
       with:
         cmake-build-type: ${{ inputs.build-type }}
         install-security-tools: 'true'
