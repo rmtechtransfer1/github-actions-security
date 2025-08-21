@@ -33,6 +33,16 @@ on:
         required: false
         type: boolean
         default: true
+      python-version:
+        description: 'Python version for setup'
+        required: false
+        type: string
+        default: '3.11'
+      requirements-file:
+        description: 'Python requirements file path'
+        required: false
+        type: string
+        default: 'service/requirements.txt'
     outputs:
       build-output-dir:
         description: 'Build output directory path'
@@ -40,11 +50,13 @@ on:
       artifact-name:
         description: 'Name of uploaded artifacts'
         value: ${{ jobs.cmake-security.outputs.artifact-name }}
+      build-success:
+        description: 'Whether the build was successful'
+        value: ${{ jobs.cmake-security.outputs.build-success }}
 
 permissions:
   contents: read
   security-events: write
-  actions: read
 
 jobs:
   cmake-security:
@@ -52,14 +64,19 @@ jobs:
     outputs:
       build-output-dir: ${{ steps.strings.outputs.build-output-dir }}
       artifact-name: ${{ steps.artifacts.outputs.artifact-name }}
+      build-success: ${{ steps.build.outcome == 'success' }}
       
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install security tools
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y clang-tidy cmake ninja-build build-essential
+    # Use the centralized setup action
+    - name: Setup dependencies and cache
+      uses: rmtechtransfer1/github-actions-security/.github/actions/setup-dependencies/c++@main
+      with:
+        python-version: ${{ inputs.python-version }}
+        install-security-tools: 'true'
+        cmake-build-type: ${{ inputs.build-type }}
+        requirements-file: ${{ inputs.requirements-file }}
 
     - name: Set reusable strings
       id: strings
@@ -76,6 +93,7 @@ jobs:
         -S ${{ inputs.source-dir }}
 
     - name: Build
+      id: build
       run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ inputs.build-type }}
 
     - name: Test
@@ -90,8 +108,7 @@ jobs:
           run-clang-tidy -p ${{ steps.strings.outputs.build-output-dir }}
         fi
 
-    - name: Prepare artifacts
-      if: inputs.upload-artifacts
+    - name: Set artifact name
       id: artifacts
       run: |
         ARTIFACT_NAME="cmake-build-${{ github.run_number }}"
