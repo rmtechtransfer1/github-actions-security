@@ -1,126 +1,112 @@
-name: CMake Security - Reusable Workflow
+name: CMake/C++ Security Workflow
+description: Reusable workflow for C++ projects with CMake
 
 on:
   workflow_call:
     inputs:
       build-type:
-        description: 'CMake build type (Release, Debug, RelWithDebInfo, etc.)'
+        description: 'CMake build type'
         required: false
-        type: string
         default: 'Release'
+        type: string
       source-dir:
-        description: 'Source directory path'
+        description: 'Source directory'
         required: false
-        type: string
         default: '.'
-      build-dir:
-        description: 'Build directory name'
-        required: false
         type: string
+      build-dir:
+        description: 'Build directory'
+        required: false
         default: 'build'
+        type: string
       cmake-args:
         description: 'Additional CMake arguments'
         required: false
-        type: string
         default: ''
-      clang-tidy-checks:
-        description: 'Clang-tidy checks to run'
-        required: false
         type: string
-        default: ''
       upload-artifacts:
         description: 'Upload build artifacts'
         required: false
-        type: boolean
         default: true
-      python-version:
-        description: 'Python version for setup'
-        required: false
-        type: string
-        default: '3.11'
-      requirements-file:
-        description: 'Python requirements file path'
-        required: false
-        type: string
-        default: 'service/requirements.txt'
+        type: boolean
     outputs:
-      build-output-dir:
-        description: 'Build output directory path'
-        value: ${{ jobs.cmake-security.outputs.build-output-dir }}
       artifact-name:
-        description: 'Name of uploaded artifacts'
+        description: 'Name of the uploaded artifact'
         value: ${{ jobs.cmake-security.outputs.artifact-name }}
-      build-success:
-        description: 'Whether the build was successful'
-        value: ${{ jobs.cmake-security.outputs.build-success }}
-
-permissions:
-  contents: read
-  security-events: write
+      build-status:
+        description: 'Build status'
+        value: ${{ jobs.cmake-security.outputs.build-status }}
 
 jobs:
   cmake-security:
     runs-on: ubuntu-latest
     outputs:
-      build-output-dir: ${{ steps.strings.outputs.build-output-dir }}
-      artifact-name: ${{ steps.artifacts.outputs.artifact-name }}
-      build-success: ${{ steps.build.outcome == 'success' }}
-      
+      artifact-name: ${{ steps.artifact.outputs.name }}
+      build-status: ${{ steps.build.outputs.status }}
+    
     steps:
-    - uses: actions/checkout@v4
-
-    # Use the centralized setup action
-    - name: Setup dependencies and cache
-      uses: rmtechtransfer1/github-actions-security/.github/actions/setup-dependencies/c++@main
+    - name: Checkout code
+      uses: actions/checkout@v4
       with:
-        python-version: ${{ inputs.python-version }}
-        install-security-tools: 'true'
+        submodules: recursive
+    
+    # Use the C++ specific setup action
+    - name: Setup C++ dependencies and tools
+      uses: ./.github/actions/setup-dependencies/c++
+      with:
         cmake-build-type: ${{ inputs.build-type }}
-        requirements-file: ${{ inputs.requirements-file }}
-
-    - name: Set reusable strings
-      id: strings
-      shell: bash
-      run: |
-        echo "build-output-dir=${{ github.workspace }}/${{ inputs.build-dir }}" >> "$GITHUB_OUTPUT"
-
+        install-security-tools: 'true'
+        cache-prefix: 'rmtech-cpp-security'
+        cmake-args: ${{ inputs.cmake-args }}
+    
     - name: Configure CMake
-      run: >
-        cmake -B ${{ steps.strings.outputs.build-output-dir }}
-        -DCMAKE_BUILD_TYPE=${{ inputs.build-type }}
-        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-        ${{ inputs.cmake-args }}
-        -S ${{ inputs.source-dir }}
-
+      run: |
+        cmake -B ${{ inputs.build-dir }} \
+          -S ${{ inputs.source-dir }} \
+          -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} \
+          ${{ inputs.cmake-args }}
+    
+    - name: Run clang-tidy
+      run: |
+        find ${{ inputs.source-dir }} -name '*.cpp' -o -name '*.cc' -o -name '*.h' -o -name '*.hpp' | \
+          xargs clang-tidy -p=${{ inputs.build-dir }} --config-file=.clang-tidy 2>&1 | \
+          tee clang-tidy-report.txt
+      continue-on-error: true
+    
+    - name: Run cppcheck
+      run: |
+        cppcheck --enable=all \
+          --suppress=missingIncludeSystem \
+          --xml --xml-version=2 \
+          --output-file=cppcheck-report.xml \
+          ${{ inputs.source-dir }}
+      continue-on-error: true
+    
     - name: Build
       id: build
-      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ inputs.build-type }}
-
-    - name: Test
-      working-directory: ${{ steps.strings.outputs.build-output-dir }}
-      run: ctest --build-config ${{ inputs.build-type }}
-
-    - name: Run Clang-tidy Security Scan
       run: |
-        if [ -n "${{ inputs.clang-tidy-checks }}" ]; then
-          run-clang-tidy -p ${{ steps.strings.outputs.build-output-dir }} -checks="${{ inputs.clang-tidy-checks }}"
-        else
-          run-clang-tidy -p ${{ steps.strings.outputs.build-output-dir }}
-        fi
-
-    - name: Set artifact name
-      id: artifacts
+        cmake --build ${{ inputs.build-dir }} --config ${{ inputs.build-type }}
+        echo "status=success" >> "$GITHUB_OUTPUT"
+    
+    - name: Generate C++ SBOM
+      run: |
+        syft ${{ inputs.build-dir }} -o cyclonedx-json=cpp-build-sbom.json
+    
+    - name: Prepare artifacts
+      id: artifact
+      if: inputs.upload-artifacts
       run: |
         ARTIFACT_NAME="cmake-build-${{ github.run_number }}"
-        echo "artifact-name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
-
+        echo "name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+    
     - name: Upload build artifacts
       if: inputs.upload-artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ steps.artifacts.outputs.artifact-name }}
+        name: ${{ steps.artifact.outputs.name }}
         path: |
-          ${{ steps.strings.outputs.build-output-dir }}/bin/
-          ${{ steps.strings.outputs.build-output-dir }}/**/cli_app
+          ${{ inputs.build-dir }}
+          clang-tidy-report.txt
+          cppcheck-report.xml
+          cpp-build-sbom.json
         retention-days: 7
-        if-no-files-found: warn

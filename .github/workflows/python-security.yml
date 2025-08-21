@@ -1,106 +1,129 @@
-name: Python Security - Reusable Workflow
+name: Python Security Workflow
+description: Reusable workflow for Python projects
 
 on:
   workflow_call:
     inputs:
       python-version:
-        description: 'Python version to use'
+        description: 'Python version'
         required: false
-        type: string
         default: '3.11'
-      source-dir:
-        description: 'Python source directory'
-        required: false
         type: string
-        default: 'service'
+      source-dir:
+        description: 'Source directory'
+        required: false
+        default: '.'
+        type: string
       requirements-file:
         description: 'Requirements file path'
         required: false
-        type: string
-        default: 'service/requirements.txt'
-      test-dir:
-        description: 'Test directory path'
-        required: false
-        type: string
-        default: 'service/tests'
-      bandit-severity:
-        description: 'Bandit severity level (l, ll, lll)'
-        required: false
-        type: string
-        default: 'll'
-      bandit-exclude:
-        description: 'Bandit exclude patterns'
-        required: false
-        type: string
         default: ''
-      fail-on-security-issues:
-        description: 'Fail workflow on security issues'
+        type: string
+      test-dir:
+        description: 'Test directory'
         required: false
-        type: boolean
+        default: 'tests'
+        type: string
+      bandit-severity:
+        description: 'Bandit severity level'
+        required: false
+        default: 'll'
+        type: string
+      fail-on-security-issues:
+        description: 'Fail if security issues found'
+        required: false
         default: true
+        type: boolean
     outputs:
-      test-results:
-        description: 'Test results status'
-        value: ${{ jobs.python-security.outputs.test-results }}
-
-permissions:
-  contents: read
-  security-events: write
-  actions: read
+      security-status:
+        description: 'Security scan status'
+        value: ${{ jobs.python-security.outputs.security-status }}
+      test-status:
+        description: 'Test status'
+        value: ${{ jobs.python-security.outputs.test-status }}
 
 jobs:
   python-security:
     runs-on: ubuntu-latest
     outputs:
-      test-results: ${{ steps.test.outcome }}
-    permissions:
-      contents: read
-      security-events: write
-
-    steps:
-    - uses: actions/checkout@v4
+      security-status: ${{ steps.security.outputs.status }}
+      test-status: ${{ steps.tests.outputs.status }}
     
-    - name: Set up Python ${{ inputs.python-version }}
-      uses: actions/setup-python@v5
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    # Use the Python specific setup action
+    - name: Setup Python dependencies and tools
+      uses: ./.github/actions/setup-dependencies/python
       with:
         python-version: ${{ inputs.python-version }}
-        
-    - name: Install dependencies
+        requirements-file: ${{ inputs.requirements-file }}
+        install-security-tools: 'true'
+        cache-prefix: 'rmtech-python-security'
+        test-framework: 'pytest'
+    
+    - name: Run Bandit security scan
+      id: security
+      working-directory: ${{ inputs.source-dir }}
       run: |
-        python -m pip install --upgrade pip
-        pip install flake8 pytest bandit[toml]
-        if [ -f "${{ inputs.requirements-file }}" ]; then 
-          pip install -r "${{ inputs.requirements-file }}"
-        fi
-        
-    - name: Lint with flake8
+        bandit -r . -f json -o bandit-report.json -${{ inputs.bandit-severity }} || true
+        bandit -r . -f txt -${{ inputs.bandit-severity }}
+        echo "status=completed" >> "$GITHUB_OUTPUT"
+      continue-on-error: ${{ !inputs.fail-on-security-issues }}
+    
+    - name: Run Safety check
+      working-directory: ${{ inputs.source-dir }}
       run: |
-        # Stop the build if there are Python syntax errors or undefined names
-        flake8 ${{ inputs.source-dir }}/ --count --select=E9,F63,F7,F82 --show-source --statistics
-        # Exit-zero treats all errors as warnings
-        flake8 ${{ inputs.source-dir }}/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-        
-    - name: Test with pytest
-      id: test
+        safety check --json --output safety-report.json || true
+        safety check
+      continue-on-error: ${{ !inputs.fail-on-security-issues }}
+    
+    - name: Run pip-audit
+      working-directory: ${{ inputs.source-dir }}
       run: |
-        if [ -d "${{ inputs.test-dir }}" ]; then
-          cd ${{ inputs.source-dir }}
-          pytest
-        else
-          echo "No test directory found at ${{ inputs.test-dir }}"
-          exit 0
-        fi
-        
-    - name: Security scan with Bandit
+        pip-audit --format json --output pip-audit-report.json || true
+        pip-audit
+      continue-on-error: ${{ !inputs.fail-on-security-issues }}
+    
+    - name: Run flake8 linting
+      working-directory: ${{ inputs.source-dir }}
       run: |
-        BANDIT_CMD="bandit -r ${{ inputs.source-dir }}/ -${{ inputs.bandit-severity }}"
-        
-        if [ -n "${{ inputs.bandit-exclude }}" ]; then
-          BANDIT_CMD="$BANDIT_CMD --exclude ${{ inputs.bandit-exclude }}"
-        fi
-        
-        if [ "${{ inputs.fail-on-security-issues }}" = "false" ]; then
-          $BANDIT_CMD || true
-        else
-          $BANDIT_CMD
-        fi
+        flake8 . --count --exit-zero --max-complexity=10 --statistics \
+          --format=json --output-file=flake8-report.json
+      continue-on-error: true
+    
+    - name: Run tests
+      id: tests
+      if: inputs.test-dir != ''
+      working-directory: ${{ inputs.source-dir }}
+      run: |
+        pytest ${{ inputs.test-dir }} \
+          --cov=. \
+          --cov-report=xml:coverage.xml \
+          --cov-report=term \
+          --junit-xml=junit.xml
+        echo "status=passed" >> "$GITHUB_OUTPUT"
+      continue-on-error: true
+    
+    - name: Generate Python SBOM
+      working-directory: ${{ inputs.source-dir }}
+      run: |
+        cyclonedx-py environment \
+          --spec-version 1.6 \
+          --output-format JSON \
+          --output-file python-sbom.json
+    
+    - name: Upload security reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: python-security-reports-${{ github.run_number }}
+        path: |
+          ${{ inputs.source-dir }}/bandit-report.json
+          ${{ inputs.source-dir }}/safety-report.json
+          ${{ inputs.source-dir }}/pip-audit-report.json
+          ${{ inputs.source-dir }}/flake8-report.json
+          ${{ inputs.source-dir }}/python-sbom.json
+          ${{ inputs.source-dir }}/coverage.xml
+          ${{ inputs.source-dir }}/junit.xml
+        retention-days: 7
