@@ -50,8 +50,18 @@ jobs:
       test-status: ${{ steps.tests.outputs.status }}
     
     steps:
-    - name: Checkout code
+    - name: Checkout calling repository code
       uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.ref }}
+    
+    - name: Checkout security actions repository
+      uses: actions/checkout@v4
+      with:
+        repository: rmtechtransfer1/github-actions-security
+        path: .github/security-actions
+        ref: main
     
     # Use the Python specific setup action
     - name: Setup Python dependencies and tools

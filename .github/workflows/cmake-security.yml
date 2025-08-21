@@ -45,10 +45,18 @@ jobs:
       build-status: ${{ steps.build.outputs.status }}
     
     steps:
-    - name: Checkout code
+    - name: Checkout calling repository code
       uses: actions/checkout@v4
       with:
-        submodules: recursive
+        repository: ${{ github.repository }}  # Caller's repo
+        ref: ${{ github.ref }}
+    
+    - name: Checkout security actions repository
+      uses: actions/checkout@v4
+      with:
+        repository: rmtechtransfer1/github-actions-security
+        path: .github/security-actions
+        ref: main
     
     # Use the C++ specific setup action
     - name: Setup C++ dependencies and tools
