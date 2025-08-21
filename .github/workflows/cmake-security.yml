@@ -47,25 +47,15 @@ jobs:
     steps:
     - name: Checkout calling repository code
       uses: actions/checkout@v4
-      with:
-        repository: ${{ github.repository }}
-        ref: ${{ github.ref }}
-    
-    - name: Checkout security actions repository
-      uses: actions/checkout@v4
-      with:
-        repository: rmtechtransfer1/github-actions-security
-        path: security-actions 
-        ref: main
     
     - name: Setup C++ dependencies and tools
-      uses: ./security-actions/.github/actions/setup-dependencies/cmake
+      uses: rmtechtransfer1/github-actions-security/.github/actions/setup-dependencies/cmake@main
       with:
         cmake-build-type: ${{ inputs.build-type }}
         install-security-tools: 'true'
         cache-prefix: 'rmtech-cpp-security'
         cmake-args: ${{ inputs.cmake-args }}
-    
+
     - name: Configure CMake
       run: |
         cmake -B ${{ inputs.build-dir }} \

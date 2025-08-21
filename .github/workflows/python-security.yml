@@ -52,19 +52,9 @@ jobs:
     steps:
     - name: Checkout calling repository code
       uses: actions/checkout@v4
-      with:
-        repository: ${{ github.repository }}
-        ref: ${{ github.ref }}
-    
-    - name: Checkout security actions repository
-      uses: actions/checkout@v4
-      with:
-        repository: rmtechtransfer1/github-actions-security
-        path: security-actions
-        ref: main
     
     - name: Setup Python dependencies and tools
-      uses: ./security-actions/.github/actions/setup-dependencies/python
+      uses: rmtechtransfer1/github-actions-security/.github/actions/setup-dependencies/python@main
       with:
         python-version: ${{ inputs.python-version }}
         requirements-file: ${{ inputs.requirements-file }}
