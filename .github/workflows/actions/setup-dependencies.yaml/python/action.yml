@@ -1,0 +1,149 @@
+name: Setup Python Dependencies and Cache
+description: Install Python and security tools for Python projects
+
+inputs:
+  python-version:
+    description: 'Python version to install'
+    required: false
+    default: '3.11'
+  requirements-file:
+    description: 'Python requirements file path'
+    required: false
+    default: ''
+  install-security-tools:
+    description: 'Install Python security tools (bandit, safety, etc.)'
+    required: false
+    default: 'true'
+  cache-prefix:
+    description: 'Cache key prefix for organization-wide consistency'
+    required: false
+    default: 'rmtech-python'
+  test-framework:
+    description: 'Test framework to install (pytest, unittest, none)'
+    required: false
+    default: 'pytest'
+
+outputs:
+  cache-hit:
+    description: 'Whether pip cache was hit'
+    value: ${{ steps.cache-pip.outputs.cache-hit }}
+  python-location:
+    description: 'Installed Python location'
+    value: ${{ steps.setup-python.outputs.python-path }}
+  setup-key:
+    description: 'Cache key used for this setup'
+    value: ${{ steps.cache-info.outputs.setup-key }}
+
+runs:
+  using: composite
+  
+  steps:
+  - name: Generate cache key
+    id: cache-info
+    shell: bash
+    run: |
+      # Build cache key from all Python files that might affect dependencies
+      FILES_TO_HASH="${{ inputs.requirements-file }}"
+      if [ -z "$FILES_TO_HASH" ]; then
+        FILES_TO_HASH="*requirements*.txt setup.py pyproject.toml poetry.lock Pipfile.lock"
+      fi
+      
+      SETUP_KEY="${{ inputs.cache-prefix }}-${{ runner.os }}-py${{ inputs.python-version }}-${{ hashFiles(env.FILES_TO_HASH) }}"
+      echo "setup-key=$SETUP_KEY" >> "$GITHUB_OUTPUT"
+      echo "Generated Python cache key: $SETUP_KEY"
+
+  - name: Set up Python ${{ inputs.python-version }}
+    id: setup-python
+    uses: actions/setup-python@v5
+    with:
+      python-version: ${{ inputs.python-version }}
+      cache: 'pip'
+      cache-dependency-path: |
+        ${{ inputs.requirements-file }}
+        *requirements*.txt
+        setup.py
+        pyproject.toml
+
+  - name: Cache pip packages
+    id: cache-pip
+    uses: actions/cache@v4
+    with:
+      path: |
+        ~/.cache/pip
+        ~/.local
+        .venv
+      key: ${{ steps.cache-info.outputs.setup-key }}-${{ github.sha }}
+      restore-keys: |
+        ${{ steps.cache-info.outputs.setup-key }}-
+        ${{ inputs.cache-prefix }}-${{ runner.os }}-py${{ inputs.python-version }}-
+        ${{ inputs.cache-prefix }}-${{ runner.os }}-py-
+
+  - name: Upgrade pip and install build tools
+    shell: bash
+    run: |
+      echo "Upgrading pip and installing build tools..."
+      python -m pip install --upgrade pip setuptools wheel
+
+  - name: Install Python security tools
+    if: inputs.install-security-tools == 'true'
+    shell: bash
+    run: |
+      echo "Installing Python security tools..."
+      pip install --upgrade \
+        bandit[toml] \
+        safety \
+        pip-audit \
+        flake8 \
+        pylint \
+        mypy \
+        black \
+        isort
+
+  - name: Install test framework
+    if: inputs.test-framework != 'none'
+    shell: bash
+    run: |
+      echo "Installing test framework: ${{ inputs.test-framework }}..."
+      if [ "${{ inputs.test-framework }}" = "pytest" ]; then
+        pip install pytest pytest-cov pytest-xdist pytest-timeout
+      fi
+
+  - name: Install project dependencies
+    if: inputs.requirements-file != ''
+    shell: bash
+    run: |
+      if [ -f "${{ inputs.requirements-file }}" ]; then
+        echo "Installing from ${{ inputs.requirements-file }}..."
+        pip install -r "${{ inputs.requirements-file }}"
+      else
+        echo "Warning: Requirements file not found at ${{ inputs.requirements-file }}"
+      fi
+
+  - name: Install Python SBOM tools
+    if: inputs.install-security-tools == 'true'
+    shell: bash
+    run: |
+      echo "Installing Python SBOM generation tools..."
+      pip install \
+        cyclonedx-bom \
+        pip-licenses \
+        pipdeptree
+
+  - name: Verify Python environment
+    shell: bash
+    run: |
+      echo "=== Python Environment Verification ==="
+      echo "Python version: $(python --version)"
+      echo "Pip version: $(pip --version)"
+      echo "Python location: $(which python)"
+      echo "Installed packages: $(pip list | wc -l) packages"
+      
+      if [ "${{ inputs.install-security-tools }}" = "true" ]; then
+        echo "=== Security Tools ==="
+        echo "Bandit: $(bandit --version 2>&1 | head -n1)"
+        echo "Safety: $(safety --version 2>&1 | head -n1)"
+        echo "Pip-audit: $(pip-audit --version)"
+        echo "CycloneDX: $(cyclonedx-py --version)"
+      fi
+      
+      echo "Cache hit: ${{ steps.cache-pip.outputs.cache-hit }}"

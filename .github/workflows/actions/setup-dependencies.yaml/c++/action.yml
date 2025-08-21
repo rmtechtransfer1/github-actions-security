@@ -1,0 +1,114 @@
+name: Setup CMake/C++ Dependencies and Cache
+description: Install system dependencies and setup caching for C++ projects
+
+inputs:
+  cmake-build-type:
+    description: 'CMake build type for cache key'
+    required: false
+    default: 'Release'
+  install-security-tools:
+    description: 'Install C++ security tools (clang-tidy, cppcheck, etc.)'
+    required: false
+    default: 'true'
+  cache-prefix:
+    description: 'Cache key prefix for organization-wide consistency'
+    required: false
+    default: 'rmtech-cpp'
+  cmake-args:
+    description: 'Additional CMake arguments'
+    required: false
+    default: ''
+
+outputs:
+  cache-hit:
+    description: 'Whether cache was hit for CMake build'
+    value: ${{ steps.cache-cmake.outputs.cache-hit }}
+  setup-key:
+    description: 'Cache key used for this setup'
+    value: ${{ steps.cache-info.outputs.setup-key }}
+
+runs:
+  using: composite
+  
+  steps:
+  - name: Generate cache key
+    id: cache-info
+    shell: bash
+    run: |
+      SETUP_KEY="${{ inputs.cache-prefix }}-${{ runner.os }}-cmake-${{ inputs.cmake-build-type }}-${{ hashFiles('CMakeLists.txt', '**/CMakeLists.txt', 'conanfile.txt', 'vcpkg.json') }}"
+      echo "setup-key=$SETUP_KEY" >> "$GITHUB_OUTPUT"
+      echo "Generated CMake cache key: $SETUP_KEY"
+
+  - name: Install system dependencies
+    shell: bash
+    run: |
+      echo "Installing C++ build dependencies..."
+      sudo apt-get update
+      sudo apt-get install -y \
+        cmake \
+        ninja-build \
+        build-essential \
+        g++ \
+        clang \
+        libssl-dev \
+        pkg-config
+
+  - name: Install C++ security tools
+    if: inputs.install-security-tools == 'true'
+    shell: bash
+    run: |
+      echo "Installing C++ security tools..."
+      sudo apt-get install -y \
+        clang-tidy \
+        cppcheck \
+        clang-tools \
+        valgrind
+      
+      # Install include-what-you-use
+      sudo apt-get install -y iwyu || echo "IWYU not available in this distribution"
+
+  - name: Cache CMake build
+    id: cache-cmake
+    uses: actions/cache@v4
+    with:
+      path: |
+        build
+        ~/.cache/CPM
+        ~/.conan
+        ~/vcpkg
+      key: ${{ steps.cache-info.outputs.setup-key }}-${{ github.sha }}
+      restore-keys: |
+        ${{ steps.cache-info.outputs.setup-key }}-
+        ${{ inputs.cache-prefix }}-${{ runner.os }}-cmake-${{ inputs.cmake-build-type }}-
+        ${{ inputs.cache-prefix }}-${{ runner.os }}-cmake-
+
+  - name: Install C++ SBOM tools
+    if: inputs.install-security-tools == 'true'
+    shell: bash
+    run: |
+      echo "Installing C++ SBOM generation tools..."
+      
+      # Install Syft for binary/container SBOM generation
+      curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin
+      
+      # Install grype for vulnerability scanning
+      curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sudo sh -s -- -b /usr/local/bin
+
+  - name: Verify C++ toolchain
+    shell: bash
+    run: |
+      echo "=== C++ Toolchain Verification ==="
+      echo "CMake version: $(cmake --version | head -n1)"
+      echo "Ninja version: $(ninja --version)"
+      echo "GCC version: $(gcc --version | head -n1)"
+      echo "Clang version: $(clang --version | head -n1)"
+      
+      if [ "${{ inputs.install-security-tools }}" = "true" ]; then
+        echo "=== Security Tools ==="
+        echo "Clang-tidy: $(clang-tidy --version | head -n1)"
+        echo "Cppcheck: $(cppcheck --version)"
+        echo "Syft: $(syft version | head -n1)"
+        echo "Grype: $(grype version | head -n1)"
+      fi
+      
+      echo "Cache hit: ${{ steps.cache-cmake.outputs.cache-hit }}"
